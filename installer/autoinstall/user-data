@@ -1,0 +1,87 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+
+  keyboard:
+    layout: us
+    variant: ''
+
+  network:
+    network:
+      version: 2
+      ethernets:
+        any:
+          match:
+            name: "en*"
+          dhcp4: true
+          dhcp6: false
+
+  storage:
+    layout:
+      name: lvm
+      sizing-policy: all
+
+  identity:
+    hostname: ai-nexus
+    username: ai
+    # Default password: AiNexus2024! — change immediately after install
+    # Generate hash: openssl passwd -6 'yourpassword'
+    password: "$6$rounds=4096$ainexusinstall$zKj.Pvu5VoKoS7TtBYKYxvTxMJVRgETfUxZ9lNGCz5oMtiBxGzXqGQGrEHoHJ7FnuCbHnJGF0pTYbpBNgNpw41"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+    authorized-keys: []
+
+  packages:
+    - git
+    - curl
+    - wget
+    - build-essential
+    - python3
+    - python3-pip
+    - python3-venv
+    - docker.io
+    - docker-compose-plugin
+    - nginx
+    - sqlite3
+    - jq
+    - htop
+    - tmux
+    - unzip
+
+  user-data:
+    disable_root: true
+    timezone: UTC
+
+  late-commands:
+    # Extract AI Nexus source
+    - "mkdir -p /target/opt/ai-nexus-src"
+    - "tar -xzf /cdrom/ai-nexus.tar.gz -C /target/opt/ai-nexus-src"
+    # Copy install script
+    - "cp /cdrom/install.sh /target/opt/ai-nexus-src/installer/install.sh"
+    - "chmod +x /target/opt/ai-nexus-src/installer/install.sh"
+    # Create marker for first-boot setup
+    - "touch /target/etc/ai-nexus-first-boot"
+    # First-boot service
+    - |
+      cat > /target/etc/systemd/system/ai-nexus-setup.service << 'EOF'
+      [Unit]
+      Description=AI Nexus First-Boot Setup
+      After=network-online.target docker.service
+      Wants=network-online.target
+      ConditionPathExists=/etc/ai-nexus-first-boot
+
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/ai-nexus-src/installer/install.sh
+      ExecStartPost=/bin/rm /etc/ai-nexus-first-boot
+      RemainAfterExit=yes
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+    - "curtin in-target --target=/target -- systemctl enable ai-nexus-setup"

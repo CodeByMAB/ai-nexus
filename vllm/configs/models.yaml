@@ -1,0 +1,53 @@
+# vLLM Model Configurations for AI Server
+# RTX 5090 (32GB VRAM) optimized settings
+
+models:
+  # Default Mode - General conversation and reasoning
+  default:
+    name: "Mistral-Small-3.2-24B"
+    model_id: "mistralai/Mistral-Small-3.2-24B-Instruct-2506"
+    description: "General-purpose frontier model for conversation and reasoning"
+    port: 8000
+    settings:
+      max_model_len: 32768
+      dtype: "auto"
+      quantization: "fp8"
+      gpu_memory_utilization: 0.90
+      enforce_eager: false
+
+  # Coding Mode - Programming assistance
+  code:
+    name: "Devstral-Small-2-24B"
+    model_id: "mistralai/Devstral-Small-2-24B-Instruct-2512"
+    description: "Specialized coding model for programming tasks"
+    port: 8001
+    settings:
+      max_model_len: 65536
+      dtype: "auto"
+      quantization: "fp8"
+      gpu_memory_utilization: 0.90
+      enforce_eager: false
+
+  # Fast Mode - Quick responses, lower resource usage
+  fast:
+    name: "Ministral-3-14B"
+    model_id: "mistralai/Ministral-3-14B-Instruct-2512"
+    description: "Lightweight model for faster responses"
+    port: 8002
+    settings:
+      max_model_len: 32768
+      dtype: "bfloat16"
+      gpu_memory_utilization: 0.85
+      enforce_eager: false
+
+  # Image Mode - SDXL via InvokeAI
+  image:
+    name: "SDXL-1.0"
+    backend: "invokeai"
+    endpoint: "http://localhost:9090"
+    description: "Text-to-image generation with Stable Diffusion XL"
+
+# Environment settings
+environment:
+  HF_HOME: "/opt/models/huggingface"
+  CUDA_VISIBLE_DEVICES: "0"

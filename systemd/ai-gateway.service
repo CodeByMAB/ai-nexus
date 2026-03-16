@@ -1,0 +1,27 @@
+[Unit]
+Description=AI Gateway (OpenAI-compatible middleware)
+After=network.target
+
+[Service]
+User=ai
+WorkingDirectory=/opt/ai/gateway
+Environment=UPSTREAM=http://127.0.0.1:11434
+Environment=ENFORCE_KEYS=1
+# (optional) pin ADMIN_TOKEN or remote validator if you use them
+# Environment=ADMIN_TOKEN=
+# Environment=USE_REMOTE_VALIDATE=0
+Environment="MEMORY_PROVIDER=zep"
+Environment="ZEP_URL=http://localhost:8010"
+Environment="ZEP_API_KEY="
+Environment="KEY_DB_PATH=/opt/ai/keys/keys.sqlite"
+ExecStart=/opt/ai/gateway/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 5050 --workers 1
+Restart=always
+RestartSec=3
+Environment="SD_BACKEND=invokeai"
+Environment="SD_URL=http://127.0.0.1:7860"
+Environment="SD_TIMEOUT=120"
+Environment="INVOKEAI_DB_PATH=${HOME}/invokeai/databases/invokeai.db"
+Environment="INVOKEAI_QUEUE_ID=default"
+
+[Install]
+WantedBy=multi-user.target

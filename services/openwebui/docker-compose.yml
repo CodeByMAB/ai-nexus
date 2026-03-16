@@ -1,0 +1,20 @@
+services:
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:latest
+    container_name: openwebui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"    # host:container
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - graphiti_default
+    environment:
+      OPENAI_BASE_URL: http://host.docker.internal:5050/v1
+    volumes:
+      - /opt/ai/openwebui-data:/app/backend/data
+
+networks:
+  graphiti_default:
+    external: true

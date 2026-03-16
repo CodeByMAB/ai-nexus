@@ -1,0 +1,320 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-03-16T00:00:00Z",
+    "tools": [
+      {
+        "vendor": "AI Nexus Contributors",
+        "name": "manual-sbom-v1",
+        "version": "1.0.0"
+      }
+    ],
+    "component": {
+      "type": "application",
+      "bom-ref": "ai-nexus@1.0.0",
+      "name": "ai-nexus",
+      "version": "1.0.0",
+      "description": "Self-hosted AI inference platform with OpenAI-compatible API gateway, multi-model vLLM inference, payment processing, knowledge graph, agent memory, and operations dashboard.",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "purl": "pkg:github/ai-nexus/ai-nexus@1.0.0",
+      "externalReferences": [
+        { "type": "website", "url": "https://github.com/ai-nexus/ai-nexus" },
+        { "type": "documentation", "url": "https://github.com/ai-nexus/ai-nexus/blob/main/README.md" }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "framework",
+      "bom-ref": "pkg:pypi/fastapi@0.110.0",
+      "name": "fastapi",
+      "version": ">=0.110.0",
+      "description": "FastAPI web framework for building APIs",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:pypi/fastapi@0.110.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/uvicorn@0.29.0",
+      "name": "uvicorn",
+      "version": ">=0.29.0",
+      "description": "ASGI server implementation",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
+      "purl": "pkg:pypi/uvicorn@0.29.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/httpx@0.27.0",
+      "name": "httpx",
+      "version": ">=0.27.0",
+      "description": "Async HTTP client",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
+      "purl": "pkg:pypi/httpx@0.27.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/pydantic@2.0.0",
+      "name": "pydantic",
+      "version": ">=2.0.0",
+      "description": "Data validation using Python type annotations",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:pypi/pydantic@2.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/aiosqlite@0.20.0",
+      "name": "aiosqlite",
+      "version": ">=0.20.0",
+      "description": "Async SQLite interface",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:pypi/aiosqlite@0.20.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/bcrypt@4.1.2",
+      "name": "bcrypt",
+      "version": ">=4.1.2",
+      "description": "Modern password hashing",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "purl": "pkg:pypi/bcrypt@4.1.2"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/pyjwt@2.8.0",
+      "name": "PyJWT",
+      "version": ">=2.8.0",
+      "description": "JSON Web Token implementation",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:pypi/pyjwt@2.8.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/pyotp@2.9.0",
+      "name": "pyotp",
+      "version": ">=2.9.0",
+      "description": "TOTP/HOTP two-factor authentication",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:pypi/pyotp@2.9.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/webauthn@2.0.0",
+      "name": "webauthn",
+      "version": ">=2.0.0",
+      "description": "WebAuthn/FIDO2 server-side implementation",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:pypi/webauthn@2.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/psutil@5.9.8",
+      "name": "psutil",
+      "version": ">=5.9.8",
+      "description": "System and process monitoring",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
+      "purl": "pkg:pypi/psutil@5.9.8"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/stripe@7.0.0",
+      "name": "stripe",
+      "version": ">=7.0.0",
+      "description": "Stripe payment processing SDK",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:pypi/stripe@7.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/sendgrid@6.0.0",
+      "name": "sendgrid",
+      "version": ">=6.0.0",
+      "description": "SendGrid email API client",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:pypi/sendgrid@6.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/cryptography@42.0.0",
+      "name": "cryptography",
+      "version": ">=42.0.0",
+      "description": "Cryptographic recipes and primitives",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "purl": "pkg:pypi/cryptography@42.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/qrcode@7.4.2",
+      "name": "qrcode",
+      "version": ">=7.4.2",
+      "description": "QR code generation",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
+      "purl": "pkg:pypi/qrcode@7.4.2"
+    },
+    {
+      "type": "framework",
+      "bom-ref": "pkg:github/vllm-project/vllm@0.15.1",
+      "name": "vllm",
+      "version": "0.15.1",
+      "description": "High-throughput LLM inference engine",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "purl": "pkg:pypi/vllm@0.15.1",
+      "externalReferences": [
+        { "type": "website", "url": "https://github.com/vllm-project/vllm" }
+      ]
+    },
+    {
+      "type": "framework",
+      "bom-ref": "pkg:pypi/torch@2.6.0",
+      "name": "torch",
+      "version": ">=2.6.0",
+      "description": "PyTorch deep learning framework",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
+      "purl": "pkg:pypi/torch@2.6.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/triton@3.5.1",
+      "name": "triton",
+      "version": "3.5.1",
+      "description": "Triton GPU programming language",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:pypi/triton@3.5.1"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/transformers@4.51.0",
+      "name": "transformers",
+      "version": ">=4.51.0",
+      "description": "HuggingFace Transformers library",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "purl": "pkg:pypi/transformers@4.51.0"
+    },
+    {
+      "type": "container",
+      "bom-ref": "pkg:docker/open-webui/open-webui@latest",
+      "name": "open-webui",
+      "version": "latest",
+      "description": "Web interface for AI models",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:docker/ghcr.io/open-webui/open-webui",
+      "externalReferences": [
+        { "type": "website", "url": "https://github.com/open-webui/open-webui" }
+      ]
+    },
+    {
+      "type": "container",
+      "bom-ref": "pkg:docker/neo4j@5.26.0",
+      "name": "neo4j",
+      "version": "5.26.0",
+      "description": "Neo4j graph database (Community Edition)",
+      "licenses": [{ "license": { "id": "GPL-3.0-only" } }],
+      "purl": "pkg:docker/neo4j@5.26.0",
+      "externalReferences": [
+        { "type": "website", "url": "https://neo4j.com" }
+      ]
+    },
+    {
+      "type": "container",
+      "bom-ref": "pkg:docker/getzep/zep@latest",
+      "name": "zep",
+      "version": "latest",
+      "description": "Long-term agent memory service",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "purl": "pkg:docker/ghcr.io/getzep/zep",
+      "externalReferences": [
+        { "type": "website", "url": "https://github.com/getzep/zep" }
+      ]
+    },
+    {
+      "type": "framework",
+      "bom-ref": "pkg:github/getzep/graphiti@latest",
+      "name": "graphiti",
+      "version": "latest",
+      "description": "Temporally-aware knowledge graph for AI agents",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "externalReferences": [
+        { "type": "website", "url": "https://github.com/getzep/graphiti" }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:github/invoke-ai/invokeai@latest",
+      "name": "InvokeAI",
+      "version": "latest",
+      "description": "SDXL image generation (Stable Diffusion)",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "externalReferences": [
+        { "type": "website", "url": "https://github.com/invoke-ai/InvokeAI" }
+      ]
+    },
+    {
+      "type": "platform",
+      "bom-ref": "ubuntu-24.04",
+      "name": "Ubuntu",
+      "version": "24.04 LTS (Noble Numbat)",
+      "description": "Base operating system",
+      "licenses": [{ "license": { "name": "Various open source licenses" } }],
+      "externalReferences": [
+        { "type": "website", "url": "https://ubuntu.com" }
+      ]
+    },
+    {
+      "type": "platform",
+      "bom-ref": "nvidia-driver-580",
+      "name": "NVIDIA Driver",
+      "version": "580.x",
+      "description": "NVIDIA GPU driver (proprietary)",
+      "licenses": [{ "license": { "name": "NVIDIA Software License" } }],
+      "externalReferences": [
+        { "type": "website", "url": "https://www.nvidia.com/drivers" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "nginx-1.24",
+      "name": "nginx",
+      "version": ">=1.24",
+      "description": "HTTP reverse proxy and web server",
+      "licenses": [{ "license": { "id": "BSD-2-Clause" } }],
+      "externalReferences": [
+        { "type": "website", "url": "https://nginx.org" }
+      ]
+    },
+    {
+      "type": "platform",
+      "bom-ref": "docker-engine",
+      "name": "Docker Engine",
+      "version": ">=24.0",
+      "description": "Container runtime",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "externalReferences": [
+        { "type": "website", "url": "https://docker.com" }
+      ]
+    }
+  ],
+  "externalReferences": [
+    {
+      "type": "other",
+      "comment": "Mistral-Small-3.2-24B-Instruct-2506 (extreme mode model)",
+      "url": "https://huggingface.co/mistralai/Mistral-Small-3.2-24B-Instruct-2506"
+    },
+    {
+      "type": "other",
+      "comment": "Devstral-Small-2-24B-Instruct-2512 (code mode model)",
+      "url": "https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512"
+    },
+    {
+      "type": "other",
+      "comment": "Ministral-3-14B-Instruct-2512 (fast mode model)",
+      "url": "https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512"
+    },
+    {
+      "type": "other",
+      "comment": "SDXL 1.0 (image generation model — OpenRAIL++-M license)",
+      "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0"
+    }
+  ]
+}

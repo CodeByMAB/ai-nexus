@@ -1,0 +1,69 @@
+name: Update SBOM
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/requirements.txt'
+      - 'docker-compose.yml'
+      - 'SBOM.json'
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 6am UTC
+  workflow_dispatch:
+
+jobs:
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install CycloneDX tools
+        run: pip install cyclonedx-bom
+
+      - name: Generate SBOM from gateway requirements
+        run: |
+          cd services/gateway
+          cyclonedx-py requirements requirements.txt \
+            --output-format json \
+            --output-file ../../sbom-gateway.json || true
+
+      - name: Generate SBOM from dashboard requirements
+        run: |
+          cd services/dashboard
+          cyclonedx-py requirements requirements.txt \
+            --output-format json \
+            --output-file ../../sbom-dashboard.json || true
+
+      - name: Generate SBOM from payment-webhook requirements
+        run: |
+          cd services/payment-webhook
+          cyclonedx-py requirements requirements.txt \
+            --output-format json \
+            --output-file ../../sbom-payment.json || true
+
+      - name: Syft full-repo SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          output-file: SBOM-auto.json
+          format: cyclonedx-json
+
+      - name: Validate SBOM.json
+        run: |
+          python3 -c "
+          import json
+          with open('SBOM.json') as f:
+              sbom = json.load(f)
+          assert sbom['bomFormat'] == 'CycloneDX'
+          assert 'components' in sbom
+          print(f'SBOM valid: {len(sbom[\"components\"])} components')
+          "

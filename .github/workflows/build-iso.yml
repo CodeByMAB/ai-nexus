@@ -1,0 +1,83 @@
+name: Build ISO
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+jobs:
+  build-iso:
+    name: Build AI Nexus Installer ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xorriso p7zip-full wget
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build ISO
+        run: |
+          chmod +x installer/build-iso.sh
+          bash installer/build-iso.sh --version ${{ steps.version.outputs.version }}
+
+      - name: Generate checksums
+        run: |
+          cd installer
+          sha256sum *.iso > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-nexus-iso-${{ steps.version.outputs.version }}
+          path: |
+            installer/*.iso
+            installer/SHA256SUMS
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer/*.iso
+            installer/SHA256SUMS
+          body: |
+            ## AI Nexus ${{ steps.version.outputs.version }}
+
+            ### Installation
+            1. Download the ISO below
+            2. Flash to USB: `sudo dd if=ai-nexus-installer-*.iso of=/dev/sdX bs=4M status=progress`
+            3. Boot from USB and follow the installer
+            4. Or run directly on Ubuntu 24.04: `sudo bash installer/install.sh`
+
+            ### Checksums
+            See `SHA256SUMS` file attached to this release.
+
+            ### Requirements
+            - NVIDIA GPU with 24GB+ VRAM (RTX 3090/4090/5090)
+            - 32GB+ RAM
+            - 500GB+ NVMe SSD
+            - Ubuntu 24.04 LTS
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}

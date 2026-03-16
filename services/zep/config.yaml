@@ -1,0 +1,20 @@
+# /opt/ai/zep/config.yaml
+server:
+  host: 0.0.0.0
+  port: 8000
+
+logging:
+  level: info
+
+auth:
+  required: false
+
+store:
+  type: postgres
+  postgres:
+    dsn: postgres://zep:PIax9zvrOLOCxbnxkt6Gc0QBAAzkBRFrx6YKKwE7wm0%3D@zep-postgres:5432/zep?sslmode=disable
+
+openai:
+  # Zep uses your gateway for LLM/embeddings; the "dummy" key is only to satisfy boot.
+  api_base: http://host.docker.internal:5050/v1
+  api_key: dummy_boot_key

@@ -1,0 +1,120 @@
+# ============================================================
+# AI Nexus — .gitignore
+# ============================================================
+
+# ----- Secrets & Credentials (NEVER COMMIT) -----
+.env
+.env.local
+.env.production
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+*_secret*
+*_token*
+
+# ----- Runtime Data -----
+data/
+*.sqlite
+*.sqlite3
+*.db
+pgdata/
+openwebui-data/
+invokeai/
+backups/
+keys/
+
+# ----- Python -----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+pip-log.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ----- Node -----
+node_modules/
+.npm/
+.yarn/
+package-lock.json
+yarn.lock
+
+# ----- Logs -----
+*.log
+logs/
+*.log.*
+log/
+
+# ----- AI Models (too large for git) -----
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.pkl
+huggingface/
+models/
+*.model
+
+# ----- Build Artifacts -----
+installer/*.iso
+installer/ubuntu-*.iso
+installer/mnt/
+installer/custom/
+installer/work/
+
+# ----- OS -----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ----- IDE -----
+.vscode/
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+*.sublime-workspace
+
+# ----- Backups / Generated -----
+*.bak
+*.backup
+*.orig
+*.old
+backups/
+/etc/systemd/system/*.d/
+
+# ----- Virtual Environments in subdirs -----
+services/*/.venv/
+vllm/.venv/
+services/*/node_modules/
+
+# ----- Docker Volumes -----
+services/graphiti/data/
+services/zep/pgdata/
+services/openwebui/data/

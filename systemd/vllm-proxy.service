@@ -1,0 +1,17 @@
+[Unit]
+Description=vLLM Minimal Proxy (Role Normalization)
+After=network.target vllm.service
+Requires=vllm.service
+
+[Service]
+Type=simple
+User=ai
+Group=ai
+WorkingDirectory=/opt/ai/vllm-proxy
+Environment="PATH=/opt/ai/vllm-proxy/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/opt/ai/vllm-proxy/.venv/bin/python3 simple_proxy.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

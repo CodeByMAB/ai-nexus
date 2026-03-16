@@ -1,0 +1,1054 @@
+#!/bin/bash
+set -euo pipefail
+HOME_DIR="${HOME:-}"
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+  # Preserve state under the invoking user's home when run via sudo.
+  HOME_DIR="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+fi
+HOME_DIR="${HOME_DIR:-$HOME}"
+BIN="$HOME_DIR/bin"
+PIDS="$HOME_DIR/.ai_pids"
+mkdir -p "$PIDS" "$HOME_DIR/logs"
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+
+# Check if a process is running (with improved PID validation)
+# --- helpers: resolve pidfile + pid-from-port (works even when ss can't show pid)
+pidfile() {
+  local s="$1"
+  # normalize special-case: your watchdog currently uses underscore
+  if [[ "$s" == "gpu-watchdog" ]]; then
+    echo "$PIDS/gpu_watchdog.pid"
+  else
+    echo "$PIDS/$s.pid"
+  fi
+}
+
+pid_from_port() {
+  local port="$1"
+  local pid=""
+
+  # Try ss first (works if kernel exposes process info to your user)
+  pid=$(ss -H -ltnp 2>/dev/null \
+    | awk -v p=":$port" '$4 ~ p { if (match($0,/pid=([0-9]+)/,a)) { print a[1]; exit } }' || true)
+
+  # Fallback to lsof if installed
+  if [[ -z "$pid" ]] && command -v lsof >/dev/null 2>&1; then
+    pid=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)
+  fi
+
+  echo "$pid"
+}
+
+# Return ports associated with a service (space-separated)
+service_ports() {
+  case "$1" in
+    # systemd core services
+    vllm)                echo "11434" ;;
+    ai-gateway)          echo "5050"  ;;
+    openai-shim)         echo "5100"  ;;
+    openai-auth-validate) echo ""     ;;
+
+    # script-managed services
+    stable-diffusion)    echo "7860"  ;;
+    a1111-bridge)        echo "7861"  ;;
+    n8n)                 echo "5678"  ;;
+
+    # docker services
+    openwebui)           echo "3000"       ;;
+    graphiti)            echo "8001"       ;;
+    graphiti-neo4j)      echo "7474 7687"  ;;
+    zep)                 echo "8010"       ;;
+    zep-postgres)        echo "5433"       ;;
+
+    # watchdog has no port
+    gpu-watchdog)        echo "" ;;
+
+    *)                   echo "" ;;
+  esac
+}
+
+# Check if a TCP port is listening on this host
+port_listening() {
+  local port="$1"
+  ss -H -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}\$" || return 1
+  return 0
+}
+
+
+# Check if a process/service is running (manager-aware + port fallback)
+is_running(){
+  local service="$1"
+  local pid pf
+
+  case "$service" in
+    # systemd-managed
+    vllm|openai-shim|openai-auth-validate|ai-gateway)
+      if systemctl is-active --quiet "$service"; then
+        return 0
+      fi
+      # fallback: if port(s) are listening, treat as running
+      for p in $(service_ports "$service"); do
+        port_listening "$p" && return 0
+      done
+      return 1
+      ;;
+
+    # docker-managed
+    openwebui|graphiti|graphiti-neo4j|zep|zep-postgres)
+      if docker ps --filter "name=^/${service}$" --filter "status=running" --format "{{.Names}}" \
+        | grep -q "^$service$"; then
+        return 0
+      fi
+      # fallback: if port(s) are listening, treat as running
+      for p in $(service_ports "$service"); do
+        port_listening "$p" && return 0
+      done
+      return 1
+      ;;
+
+    # watchdog (pidfile)
+    gpu-watchdog)
+      # accept either filename to be safe
+      if [[ -f "$PIDS/gpu_watchdog.pid" ]]; then
+        pid="$(cat "$PIDS/gpu_watchdog.pid" 2>/dev/null || echo "")"
+      elif [[ -f "$PIDS/gpu-watchdog.pid" ]]; then
+        pid="$(cat "$PIDS/gpu-watchdog.pid" 2>/dev/null || echo "")"
+      else
+        return 1
+      fi
+
+      if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        return 0
+      fi
+
+      # stale pidfile cleanup
+      rm -f "$PIDS/gpu_watchdog.pid" "$PIDS/gpu-watchdog.pid" 2>/dev/null || true
+      return 1
+      ;;
+
+    # script-managed (pidfile first, then port fallback)
+    *)
+      pf="$PIDS/$service.pid"
+
+      if [[ -f "$pf" ]]; then
+        pid="$(cat "$pf" 2>/dev/null || echo "")"
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+          return 0
+        fi
+        # stale pidfile
+        rm -f "$pf" 2>/dev/null || true
+      fi
+
+      # fallback: port listening counts as running
+      for p in $(service_ports "$service"); do
+        port_listening "$p" && return 0
+      done
+
+      return 1
+      ;;
+  esac
+}
+
+
+# Check if port is in use and find matching process
+port_check_with_process(){
+  local port="$1" process_hint="${2:-}"
+  ss -H -ltn 2>/dev/null | grep -q ":$port " || return 1
+
+  # optional: validate the owning process looks right (best-effort)
+  local pid
+  pid="$(pid_from_port "$port")"
+  if [[ -n "$pid" && -n "$process_hint" ]]; then
+    ps -p "$pid" -o args= 2>/dev/null | grep -qi "$process_hint" || true
+  fi
+  return 0
+}
+
+# Update PID file with actual running process
+update_pid(){
+  local service="$1"
+  local port pid pf
+  pf="$(pidfile "$service")"
+
+  case "$service" in
+    stable-diffusion) port=7860 ;;
+    a1111-bridge)     port=7861 ;;
+    n8n)              port=5678 ;;
+    *) return 1 ;;
+  esac
+
+  pid="$(pid_from_port "$port")"
+  if [[ -n "$pid" ]]; then
+    echo "$pid" > "$pf"
+    return 0
+  fi
+  return 1
+}
+
+
+# Get PID for a service
+# Get PID for a service (with port-based fallback)
+get_pid(){
+  local service="$1"
+  local pid="-"
+
+  # Helper: extract PID from a listening TCP port (best-effort)
+  pid_from_port() {
+    local port="$1"
+    local found=""
+
+    # Try ss first (may require privileges to show pid= on some systems)
+    found=$(ss -H -ltnp 2>/dev/null \
+      | awk -v p=":$port" '$4 ~ p { if (match($0,/pid=([0-9]+)/,a)) { print a[1]; exit } }' \
+      || true)
+
+    # Fallback to lsof if available
+    if [[ -z "$found" ]] && command -v lsof >/dev/null 2>&1; then
+      found=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)
+    fi
+
+    echo "$found"
+  }
+
+  case "$service" in
+    # systemd services
+    vllm|openai-shim|openai-auth-validate|ai-gateway)
+      pid=$(systemctl show -p MainPID --value "$service" 2>/dev/null || echo "-")
+      [[ -n "$pid" && "$pid" != "0" ]] || pid="-"
+      echo "$pid"
+      return
+      ;;
+
+    # docker containers (host port PID is usually docker-proxy; container PID is better)
+    openwebui|graphiti|graphiti-neo4j|zep|zep-postgres)
+      pid=$(docker inspect --format '{{.State.Pid}}' "$service" 2>/dev/null || echo "-")
+      [[ -n "$pid" && "$pid" != "0" ]] || pid="-"
+      echo "$pid"
+      return
+      ;;
+
+    # watchdog pidfile name special-case
+    gpu-watchdog)
+      pid=$(cat "$PIDS/gpu_watchdog.pid" 2>/dev/null || echo "-")
+      [[ -n "$pid" ]] || pid="-"
+      echo "$pid"
+      return
+      ;;
+
+    # script-managed (pidfile first, then port fallback)
+    *)
+      local f="$PIDS/$service.pid"
+      if [[ -f "$f" ]]; then
+        pid=$(cat "$f" 2>/dev/null || echo "-")
+        if [[ -n "$pid" && "$pid" != "-" ]] && kill -0 "$pid" 2>/dev/null; then
+          echo "$pid"
+          return
+        fi
+      fi
+
+      # Port mapping for ALL current services
+      local ports=()
+      case "$service" in
+        # Core services (optional fallback; usually systemd handles these)
+        vllm)            ports=(11434) ;;
+        ai-gateway)      ports=(5050)  ;;
+        openai-shim)     ports=(5100)  ;;
+        # openai-auth-validate has no port
+
+        # Script-managed
+        stable-diffusion) ports=(7860) ;;
+        a1111-bridge)     ports=(7861) ;;
+        n8n)              ports=(5678) ;;
+
+        # Docker exposed ports (note: ss may show docker-proxy; docker inspect is preferred)
+        openwebui)        ports=(3000) ;;
+        graphiti)         ports=(8000) ;;
+        zep)              ports=(8010) ;;
+        zep-postgres)     ports=(5433) ;;
+        graphiti-neo4j)   ports=(7474 7687) ;;
+
+        *) ports=() ;;
+      esac
+
+      if [[ ${#ports[@]} -gt 0 ]]; then
+        for p in "${ports[@]}"; do
+          pid="$(pid_from_port "$p")"
+          if [[ -n "$pid" ]]; then
+            # Backfill pidfile for script-managed services (so status stops showing "-")
+            case "$service" in
+              stable-diffusion|a1111-bridge|n8n)
+                echo "$pid" > "$f"
+                ;;
+            esac
+            echo "$pid"
+            return
+          fi
+        done
+      fi
+
+      echo "-"
+      return
+      ;;
+  esac
+}
+
+
+# Check if port is ready
+port_ready(){
+  local p="$1"
+  ss -tlnp 2>/dev/null | grep -q ":$p" || curl -sf "http://127.0.0.1:$p" >/dev/null 2>&1
+}
+
+# Get Docker container health
+docker_health(){
+  local container="$1"
+  local health
+  health=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null)
+  case "$health" in
+    healthy) echo -e "${GREEN}healthy${NC}" ;;
+    unhealthy) echo -e "${RED}unhealthy${NC}" ;;
+    starting) echo -e "${YELLOW}starting${NC}" ;;
+    none|"") echo -e "${CYAN}no-check${NC}" ;;
+    *) echo "$health" ;;
+  esac
+}
+
+# Start a script-managed service
+#!/bin/bash
+# … [previous code unchanged up to start_one] …
+
+# Start a script-managed service
+start_one(){
+  local s="$1" p log="$HOME_DIR/logs/$s.log" script
+  case "$s" in
+    vllm) p=11434;;
+    stable-diffusion)
+      # Check if mode supports image generation (only fast+image or image)
+      local current_mode=$(get_current_mode)
+      if [[ "$current_mode" != "fast+image" && "$current_mode" != "image" ]]; then
+        echo -e "  ${YELLOW}⚠${NC} Cannot start stable-diffusion in '$current_mode' mode"
+        echo -e "    Only 'fast' mode has enough VRAM for LLM + SDXL"
+        echo -e "    Switch mode: ${CYAN}ai mode fast+image${NC} or ${CYAN}ai mode image${NC}"
+        return 1
+      fi
+      p=7860; script="run_invokeai.sh"
+      ;;
+    a1111-bridge) p=7861; script="run_a1111_bridge.sh";;
+    n8n) p=5678; script="run_n8n.sh";;
+    openai-shim|openai-auth-validate|ai-gateway)
+      is_running "$s" && { echo -e "  ${YELLOW}⚠${NC} $s already running"; return; }
+      echo -e "  ${GREEN}🚀${NC} Starting $s..."
+      sudo systemctl start "$s"
+      echo -e "  ${GREEN}✓${NC} $s started"
+      return
+      ;;
+    openwebui|graphiti|graphiti-neo4j|zep|zep-postgres)
+      is_running "$s" && { echo -e "  ${YELLOW}⚠${NC} $s already running"; return; }
+      echo -e "  ${GREEN}🚀${NC} Starting Docker container $s..."
+      docker start "$s"
+      echo -e "  ${GREEN}✓${NC} $s started"
+      return
+      ;;
+    gpu-watchdog)
+      is_running "$s" && { echo -e "  ${YELLOW}⚠${NC} $s already running"; return; }
+      echo -e "  ${GREEN}🚀${NC} Starting GPU Watchdog..."
+      nohup "$BIN/gpu_watchdog.sh" >"$HOME_DIR/logs/gpu_watchdog.log" 2>&1 & echo $! > "$PIDS/gpu_watchdog.pid"
+      echo -e "  ${GREEN}✓${NC} GPU Watchdog started (monitors GPU power and auto-restarts Ollama if overheating)"
+      return
+      ;;
+    *) echo "Unknown service: $s"; exit 1;;
+  esac
+
+  # --- General start logic (runs for script‑managed services)
+  is_running "$s" && { echo -e "  ${YELLOW}⚠${NC} $s already running"; return; }
+  echo -e "  ${GREEN}🚀${NC} Starting $s..."
+  if [[ "$s" == "vllm" ]]; then
+    sudo systemctl start vllm && echo $$ > "$PIDS/$s.pid"
+  else
+      nohup "$BIN/$script" >"$log" 2>&1 & echo $! > "$PIDS/$s.pid"
+  fi
+
+  for i in {1..60}; do
+    sleep 1
+    if port_ready "$p"; then
+      update_pid "$s" || true
+      echo -e "  ${GREEN}✓${NC} $s ready on :$p"
+      return
+    fi
+  done
+
+  echo -e "  ${YELLOW}⚠${NC} $s started but not responsive yet"
+}
+
+# Stop a service
+stop_one(){
+  local s="$1" f
+  f="$(pidfile "$s")"
+
+  is_running "$s" || { echo -e "  ${YELLOW}⚠${NC} $s not running"; return; }
+  echo -e "  ${RED}🛑${NC} Stopping $s..."
+
+  case "$s" in
+    vllm|openai-shim|openai-auth-validate|ai-gateway)
+      sudo systemctl stop "$s" && rm -f "$f" && echo -e "  ${GREEN}✓${NC} $s stopped"
+      ;;
+    openwebui|graphiti|graphiti-neo4j|zep|zep-postgres)
+      if ! docker ps -a --format "{{.Names}}" | grep -q "^${s}$"; then
+        echo -e "  ${YELLOW}⚠${NC} $s container not found"
+        return
+      fi
+      docker stop "$s" >/dev/null 2>&1 && echo -e "  ${GREEN}✓${NC} $s stopped" || echo -e "  ${YELLOW}⚠${NC} $s already stopped"
+      ;;
+    gpu-watchdog)
+      local pid=$(cat "$f" 2>/dev/null || echo "")
+      if [[ -n "$pid" ]]; then
+        kill -TERM "$pid" 2>/dev/null || true
+        rm -f "$f"
+        echo -e "  ${GREEN}✓${NC} GPU Watchdog stopped"
+      else
+        echo -e "  ${YELLOW}⚠${NC} No PID file found"
+      fi
+      ;;
+    *)
+      local pid=$(cat "$f" 2>/dev/null || echo "")
+      if [[ -n "$pid" ]]; then
+        kill -TERM "$pid" 2>/dev/null || true
+        for i in {1..10}; do
+          kill -0 "$pid" 2>/dev/null || { rm -f "$f"; echo -e "  ${GREEN}✓${NC} $s stopped"; return; }
+          sleep 1
+        done
+        kill -KILL "$pid" 2>/dev/null || true
+        rm -f "$f"
+        echo -e "  ${GREEN}✓${NC} $s stopped (force)"
+      else
+        echo -e "  ${YELLOW}⚠${NC} No PID file found"
+      fi
+      ;;
+  esac
+}
+
+# Enhanced status display
+status(){
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BLUE}                  AI Services Status${NC}"
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  # Core AI Services (Systemd)
+  echo -e "\n${CYAN}Core Services (systemd):${NC}"
+  for s in vllm ai-gateway openai-shim openai-auth-validate; do
+    local port pid
+    case "$s" in
+      vllm) port=11434 ;;
+      ai-gateway) port=5050 ;;
+      openai-shim) port=5100 ;;
+      openai-auth-validate) port="" ;;
+    esac
+
+    if is_running "$s"; then
+      pid=$(get_pid "$s")
+      if [[ -n "$port" ]]; then
+        echo -e "  ${GREEN}✓${NC} $s ${GREEN}RUNNING${NC} (PID: $pid, Port: $port)"
+      else
+        echo -e "  ${GREEN}✓${NC} $s ${GREEN}RUNNING${NC} (PID: $pid)"
+      fi
+    else
+      echo -e "  ${RED}✗${NC} $s ${RED}STOPPED${NC}"
+    fi
+  done
+
+  # Script-Managed Services
+  echo -e "\n${CYAN}Script-Managed Services:${NC}"
+  for s in stable-diffusion a1111-bridge n8n; do
+    local port pid
+    case "$s" in
+      stable-diffusion) port=7860 ;;
+      a1111-bridge) port=7861 ;;
+      n8n) port=5678 ;;
+    esac
+
+    if is_running "$s"; then
+      pid=$(get_pid "$s")
+      echo -e "  ${GREEN}✓${NC} $s ${GREEN}RUNNING${NC} (PID: $pid, Port: $port)"
+    else
+      echo -e "  ${RED}✗${NC} $s ${RED}STOPPED${NC}"
+    fi
+  done
+
+  # Docker Services
+  echo -e "\n${CYAN}Docker Containers:${NC}"
+  for s in openwebui graphiti graphiti-neo4j zep zep-postgres; do
+    local port health
+    case "$s" in
+      openwebui) port=3000 ;;
+      graphiti) port=8000 ;;
+      graphiti-neo4j) port="7474,7687" ;;
+      zep) port=8010 ;;
+      zep-postgres) port=5433 ;;
+    esac
+
+    if is_running "$s"; then
+      health=$(docker_health "$s")
+      echo -e "  ${GREEN}✓${NC} $s ${GREEN}RUNNING${NC} (Port: $port, Health: $health)"
+    else
+      echo -e "  ${RED}✗${NC} $s ${RED}STOPPED${NC}"
+    fi
+  done
+
+  # GPU Watchdog
+  echo -e "\n${CYAN}System Protection:${NC}"
+  if is_running "gpu-watchdog"; then
+    local pid=$(cat "$PIDS/gpu_watchdog.pid" 2>/dev/null || echo "-")
+    echo -e "  ${GREEN}✓${NC} gpu-watchdog ${GREEN}RUNNING${NC} (PID: $pid) - Monitoring GPU power"
+  else
+    echo -e "  ${RED}✗${NC} gpu-watchdog ${RED}STOPPED${NC} - No overheating protection"
+  fi
+
+  # Active AI Mode
+  echo -e "\n${CYAN}AI Mode:${NC}"
+  if is_running "vllm"; then
+    local served_model
+    served_model=$(curl -s --max-time 3 http://localhost:11434/v1/models 2>/dev/null \
+      | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+    if [[ -n "$served_model" ]]; then
+      local configured_mode=$(get_current_mode)
+      echo -e "  ${GREEN}✓${NC} Active model: ${GREEN}$served_model${NC}  (configured mode: $configured_mode)"
+    else
+      echo -e "  ${YELLOW}⏳${NC} vLLM is running but model is still loading..."
+    fi
+  else
+    echo -e "  ${RED}✗${NC} ${RED}none${NC} - vLLM is not running"
+  fi
+
+  echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
+# Enhanced URLs display
+urls(){
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BLUE}                  Service URLs${NC}"
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  echo -e "\n${CYAN}LLM Services:${NC}"
+  echo -e "  vLLM:                http://localhost:11434 (OpenAI-compatible API)"
+  echo -e "  AI Gateway:          http://localhost:5050 (with Zep memory)"
+  echo -e "  OpenAI Shim:         http://localhost:5100"
+
+  echo -e "\n${CYAN}Image Generation:${NC}"
+  echo -e "  InvokeAI:            http://localhost:7860"
+  echo -e "  A1111 Bridge:        http://localhost:7861"
+
+  echo -e "\n${CYAN}Automation & Memory:${NC}"
+  echo -e "  n8n:                 http://localhost:5678"
+  echo -e "  Zep Memory:          http://localhost:8010"
+  echo -e "  Graphiti:            http://localhost:8000"
+
+  echo -e "\n${CYAN}Web Interfaces:${NC}"
+  echo -e "  Open WebUI:          http://localhost:3000"
+  echo -e "  Neo4j Browser:       http://localhost:7474"
+
+  echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
+# Mode configuration
+MODE_FILE="$HOME_DIR/.ai_mode"
+
+# Get current mode
+get_current_mode() {
+  if [[ -f "$MODE_FILE" ]]; then
+    cat "$MODE_FILE"
+  else
+    echo "fast"  # default
+  fi
+}
+
+# Mode switching function
+switch_mode() {
+  local requested_mode="$1"
+  local llm_mode image_mode=""
+  local gpu_util="0.95"
+  local max_len model_name
+  local switch_script_mode
+  local switch_mode_script="${AI_ROOT:-/opt/ai}/vllm/scripts/switch-mode.sh"
+
+  # Parse mode (e.g., "fast+image" -> llm_mode=fast, image_mode=true)
+  if [[ "$requested_mode" == *"+image"* ]]; then
+    llm_mode="${requested_mode%+image}"
+    image_mode="true"
+    gpu_util="0.70"  # Reduced for SDXL coexistence
+    # Only fast+image is supported (code/extreme are too large for SDXL coexistence)
+    if [[ "$llm_mode" != "fast" ]]; then
+      echo -e "${RED}Error: '$requested_mode' is not supported${NC}"
+      echo -e "  Only 'fast' mode (Ministral-14B) has enough VRAM to run alongside SDXL"
+      echo -e "  Valid image modes: ${CYAN}fast+image${NC}, ${CYAN}image${NC}"
+      return 1
+    fi
+  else
+    llm_mode="$requested_mode"
+  fi
+
+  # Validate LLM mode and set profile metadata
+  case "$llm_mode" in
+    fast)
+      model_name="fast"
+      max_len=98304
+      [[ -n "$image_mode" ]] && max_len=49152
+      ;;
+    code)
+      model_name="code"
+      max_len=65536
+      ;;
+    extreme)
+      model_name="extreme"
+      max_len=49152
+      ;;
+    image)
+      # Image-only mode (no LLM)
+      echo -e "${BLUE}Switching to image-only mode...${NC}"
+      if is_running "vllm"; then
+        echo -e "  ${YELLOW}→${NC} Stopping vLLM..."
+        sudo systemctl stop vllm
+      fi
+      if ! is_running "stable-diffusion"; then
+        echo -e "  ${GREEN}→${NC} Starting InvokeAI..."
+        start_one stable-diffusion
+      fi
+      echo "image" > "$MODE_FILE"
+      echo -e "\n${GREEN}✓${NC} Mode switched to: ${CYAN}image${NC} (SDXL only)"
+      return 0
+      ;;
+    *)
+      echo -e "${RED}Unknown mode: $llm_mode${NC}"
+      echo -e "Valid modes: fast, code, extreme, image"
+      echo -e "Combined modes: fast+image"
+      return 1
+      ;;
+  esac
+
+  echo -e "${BLUE}Switching to ${CYAN}$requested_mode${BLUE} mode...${NC}"
+
+  # Stop services first
+  if is_running "vllm"; then
+    echo -e "  ${YELLOW}→${NC} Stopping vLLM..."
+    sudo systemctl stop vllm
+  fi
+
+  if [[ -z "$image_mode" ]] && is_running "stable-diffusion"; then
+    echo -e "  ${YELLOW}→${NC} Stopping InvokeAI (not needed)..."
+    stop_one stable-diffusion
+  fi
+
+  if [[ ! -x "$switch_mode_script" ]]; then
+    echo -e "${RED}Error:${NC} missing executable $switch_mode_script"
+    return 1
+  fi
+
+  switch_script_mode="$llm_mode"
+  [[ -n "$image_mode" ]] && switch_script_mode="fast+image"
+
+  # Delegate vLLM profile construction and health rollback to the dedicated switch script.
+  echo -e "  ${BLUE}→${NC} Switching vLLM via switch-mode.sh ($switch_script_mode)..."
+  if ! sudo "$switch_mode_script" --mode "$switch_script_mode" --timeout 360; then
+    echo -e "${RED}Error:${NC} vLLM mode switch failed"
+    return 1
+  fi
+
+  # Confirm target served model is available before continuing.
+  echo -e "  ${BLUE}→${NC} Verifying vLLM model endpoint..."
+  for i in {1..45}; do
+    if curl -s http://localhost:11434/v1/models 2>/dev/null | grep -q "\"id\":\"$model_name\""; then
+      echo -e "  ${GREEN}✓${NC} vLLM ready (model: $model_name)"
+      break
+    fi
+    if [[ "$i" -eq 45 ]]; then
+      echo -e "${RED}Error:${NC} vLLM did not report model '$model_name' in time"
+      return 1
+    fi
+    sleep 2
+  done
+
+  # Start InvokeAI if +image mode
+  if [[ -n "$image_mode" ]]; then
+    if ! is_running "stable-diffusion"; then
+      echo -e "  ${GREEN}→${NC} Starting InvokeAI for image generation..."
+      start_one stable-diffusion
+    else
+      echo -e "  ${GREEN}✓${NC} InvokeAI already running"
+    fi
+  fi
+
+  # Save current mode
+  echo "$requested_mode" > "$MODE_FILE"
+
+  # Update OpenClaw config to use the new model (handles fast, code, extreme, and fast+image)
+  local openclaw_config="$HOME_DIR/.openclaw/openclaw.json"
+  if [[ -n "$model_name" && -f "$openclaw_config" ]] && command -v jq >/dev/null 2>&1; then
+    local openclaw_model="Astra/$model_name"
+    local fast_ctx=98304
+    [[ "$model_name" == "fast" ]] && fast_ctx="$max_len"
+    jq \
+      --arg primary "$openclaw_model" \
+      --argjson fast_ctx "$fast_ctx" \
+      --argjson code_ctx 65536 \
+      --argjson extreme_ctx 32768 \
+      --argjson fast_temp 0.28 \
+      --argjson fast_top_p 0.90 \
+      --argjson fast_param_max_tokens 8192 \
+      --argjson code_temp 0.20 \
+      --argjson code_top_p 0.90 \
+      --argjson code_param_max_tokens 8192 \
+      --argjson extreme_temp 0.24 \
+      --argjson extreme_top_p 0.92 \
+      --argjson extreme_param_max_tokens 12288 \
+      '
+      .agents.defaults.model.primary = $primary
+      | .agents.defaults.models = (.agents.defaults.models // {})
+      | .agents.defaults.models["Astra/fast"] = (
+          (.agents.defaults.models["Astra/fast"] // {})
+          + {params: ((.agents.defaults.models["Astra/fast"].params // {}) + {temperature: $fast_temp, top_p: $fast_top_p, maxTokens: $fast_param_max_tokens})}
+        )
+      | .agents.defaults.models["Astra/code"] = (
+          (.agents.defaults.models["Astra/code"] // {})
+          + {params: ((.agents.defaults.models["Astra/code"].params // {}) + {temperature: $code_temp, top_p: $code_top_p, maxTokens: $code_param_max_tokens})}
+        )
+      | .agents.defaults.models["Astra/extreme"] = (
+          (.agents.defaults.models["Astra/extreme"] // {})
+          + {params: ((.agents.defaults.models["Astra/extreme"].params // {}) + {temperature: $extreme_temp, top_p: $extreme_top_p, maxTokens: $extreme_param_max_tokens})}
+        )
+      | (if (.models.providers // {} | has("Astra")) then
+          .models.providers.Astra.models = (
+            (.models.providers.Astra.models // [])
+            | map(
+                if .id == "fast" then .contextWindow = $fast_ctx | .maxTokens = 16384
+                elif .id == "code" then .contextWindow = $code_ctx | .maxTokens = 16384
+                elif .id == "extreme" then .contextWindow = $extreme_ctx | .maxTokens = 16384
+                else . end
+              )
+          )
+        else . end)
+      | (if (.models.providers // {} | has("astra")) then
+          .models.providers.astra.models = (
+            (.models.providers.astra.models // [])
+            | map(
+                if .id == "fast" then .contextWindow = $fast_ctx | .maxTokens = 16384
+                elif .id == "code" then .contextWindow = $code_ctx | .maxTokens = 16384
+                elif .id == "extreme" then .contextWindow = $extreme_ctx | .maxTokens = 16384
+                else . end
+              )
+          )
+        else . end)
+      ' "$openclaw_config" > "${openclaw_config}.tmp" \
+      && mv "${openclaw_config}.tmp" "$openclaw_config"
+    echo -e "  ${GREEN}✓${NC} OpenClaw default model set to: $openclaw_model"
+    echo -e "  ${GREEN}✓${NC} OpenClaw mode sampling + context profiles synchronized"
+
+    # Restart OpenClaw gateway to pick up the new model
+    if systemctl --user is-active --quiet openclaw-gateway 2>/dev/null; then
+      echo -e "  ${BLUE}→${NC} Restarting OpenClaw gateway..."
+      systemctl --user restart openclaw-gateway
+      sleep 2
+      if systemctl --user is-active --quiet openclaw-gateway; then
+        echo -e "  ${GREEN}✓${NC} OpenClaw gateway restarted"
+      else
+        echo -e "  ${YELLOW}⚠${NC} OpenClaw gateway restart failed - check: journalctl --user -u openclaw-gateway"
+      fi
+    elif pgrep -x "openclaw-gateway" >/dev/null && command -v openclaw >/dev/null 2>&1; then
+      # Fallback for non-systemd OpenClaw
+      echo -e "  ${BLUE}→${NC} Restarting OpenClaw gateway..."
+      openclaw gateway restart --force >/dev/null 2>&1 || true
+      sleep 2
+      echo -e "  ${GREEN}✓${NC} OpenClaw gateway restart initiated"
+    fi
+  fi
+
+  echo -e "\n${GREEN}✓${NC} Mode switched to: ${CYAN}$requested_mode${NC}"
+  if [[ -n "$image_mode" ]]; then
+    echo -e "  LLM: $model_name (GPU: ${gpu_util}, Context: ${max_len})"
+    echo -e "  Image: SDXL via InvokeAI"
+  else
+    echo -e "  LLM: $model_name (GPU: 95%, Context: ${max_len})"
+  fi
+}
+
+# Show mode status
+mode_status() {
+  local current_mode=$(get_current_mode)
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BLUE}                    AI Mode Status${NC}"
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  echo -e "\n${CYAN}Configured Mode:${NC} ${GREEN}$current_mode${NC}"
+
+  # Show live status
+  if is_running "vllm"; then
+    local served_model
+    served_model=$(curl -s --max-time 3 http://localhost:11434/v1/models 2>/dev/null \
+      | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+    if [[ -n "$served_model" ]]; then
+      echo -e "${CYAN}Live Model:${NC}      ${GREEN}$served_model${NC}"
+    else
+      echo -e "${CYAN}Live Model:${NC}      ${YELLOW}loading...${NC}"
+    fi
+  else
+    echo -e "${CYAN}Live Model:${NC}      ${RED}none${NC} (vLLM not running)"
+  fi
+
+  echo -e "\n${CYAN}Available Modes:${NC}"
+  echo -e "  ${YELLOW}fast${NC}          Ministral-3-14B    (14B, 98K context, fastest)"
+  echo -e "  ${YELLOW}code${NC}          Devstral-24B       (24B, 65K context, coding)"
+  echo -e "  ${YELLOW}extreme${NC}       Mistral-Small-24B  (24B, 32K context, smartest)"
+  echo -e "  ${YELLOW}image${NC}         SDXL only          (no LLM, full GPU for images)"
+
+  echo -e "\n${CYAN}Combined Mode (LLM + Image):${NC}"
+  echo -e "  ${YELLOW}fast+image${NC}    Ministral + SDXL   (70% GPU LLM, 30% images)"
+  echo -e "  ${CYAN}Note:${NC} Only 'fast' mode can run alongside SDXL (code/extreme are too large)"
+
+  echo -e "\n${CYAN}Service Status:${NC}"
+  if is_running "vllm"; then
+    echo -e "  ${GREEN}✓${NC} vLLM running"
+  else
+    echo -e "  ${RED}✗${NC} vLLM stopped"
+  fi
+
+  if is_running "stable-diffusion"; then
+    echo -e "  ${GREEN}✓${NC} InvokeAI running (SDXL)"
+  else
+    echo -e "  ${RED}✗${NC} InvokeAI stopped"
+  fi
+
+  echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "Switch mode: ${CYAN}ai mode <mode>${NC}  (e.g., ai mode fast+image)"
+}
+
+# Main command handler
+case "${1:-status}" in
+  status)
+    status
+    ;;
+  start)
+    shift
+    s="${1:-all}"
+    if [[ "$s" == "all" ]]; then
+      echo -e "${BLUE}Starting all AI services...${NC}\n"
+      current_mode=$(get_current_mode)
+      start_one vllm
+      start_one ai-gateway
+      start_one openai-shim
+      start_one openai-auth-validate
+      # Only start image services if mode includes +image
+      if [[ "$current_mode" == *"+image"* || "$current_mode" == "image" ]]; then
+        start_one stable-diffusion
+      else
+        echo -e "  ${CYAN}ℹ${NC} stable-diffusion skipped (mode: $current_mode, use 'ai mode fast+image' to enable)"
+      fi
+      start_one n8n
+      start_one openwebui
+      start_one graphiti-neo4j
+      start_one graphiti
+      start_one zep-postgres
+      start_one zep
+      echo ""
+      status
+    else
+      start_one "$s"
+      status
+    fi
+    ;;
+  stop)
+    shift
+    s="${1:-all}"
+    if [[ "$s" == "all" ]]; then
+      echo -e "${BLUE}Stopping all AI services...${NC}\n"
+      stop_one zep
+      stop_one zep-postgres
+      stop_one graphiti
+      stop_one graphiti-neo4j
+      stop_one openwebui
+      stop_one n8n
+      stop_one a1111-bridge
+      stop_one stable-diffusion
+      stop_one openai-auth-validate
+      stop_one openai-shim
+      stop_one ai-gateway
+      stop_one vllm
+      echo ""
+      status
+    else
+      stop_one "$s"
+    fi
+    ;;
+  restart)
+    shift
+    s="${1:-all}"
+    if [[ "$s" == "all" ]]; then
+      "$0" stop all
+      sleep 2
+      "$0" start all
+    else
+      "$0" stop "$s"
+      sleep 1
+      "$0" start "$s"
+    fi
+    ;;
+  logs)
+    shift
+    s="${1:-vllm}"
+    case "$s" in
+      vllm|openai-shim|openai-auth-validate|ai-gateway)
+        sudo journalctl -u "$s" -f
+        ;;
+      openwebui|graphiti|graphiti-neo4j|zep|zep-postgres)
+        docker logs -f "$s"
+        ;;
+      *)
+        if [[ -f "$HOME_DIR/logs/$s.log" ]]; then
+          tail -f "$HOME_DIR/logs/$s.log"
+        else
+          echo "No log file found for $s"
+          exit 1
+        fi
+        ;;
+    esac
+    ;;
+  urls)
+    urls
+    ;;
+  health)
+    echo -e "${BLUE}🏥 Health Check${NC}"
+    for s in vllm ai-gateway openai-shim stable-diffusion a1111-bridge n8n openwebui graphiti zep; do
+      if is_running "$s"; then
+        echo -e "  ${GREEN}✓${NC} $s is healthy"
+      else
+        echo -e "  ${RED}✗${NC} $s is down"
+      fi
+    done
+    ;;
+  update)
+    echo -e "${BLUE}🔍 Checking for updates...${NC}\n"
+
+    # Update system packages
+    echo -e "${CYAN}Updating system package lists:${NC}"
+    sudo apt update
+
+    # Show available upgrades
+    echo -e "\n${CYAN}Available upgrades:${NC}"
+    apt list --upgradable 2>/dev/null | grep -v "Listing..."
+
+    # Check n8n version
+    echo -e "\n${CYAN}Checking n8n version:${NC}"
+    current_n8n=$(n8n --version 2>/dev/null || echo "not installed")
+    latest_n8n=$(npm view n8n version 2>/dev/null || echo "unknown")
+    echo -e "  Current: $current_n8n"
+    echo -e "  Latest:  $latest_n8n"
+
+    # Update Docker images
+    echo -e "\n${CYAN}Checking Docker images for updates:${NC}"
+    for container in openwebui graphiti graphiti-neo4j zep zep-postgres; do
+      if docker ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+        image=$(docker inspect --format='{{.Config.Image}}' "$container" 2>/dev/null)
+        if [[ -n "$image" ]]; then
+          echo -e "  ${BLUE}→${NC} Checking $container ($image)..."
+          docker pull "$image" 2>&1 | grep -E "(up to date|Downloaded|Status:)" | head -1
+        fi
+      fi
+    done
+
+    echo -e "\n${GREEN}✓${NC} Update check complete. Run 'ai upgrade' to apply updates."
+    ;;
+  mode)
+    shift
+    mode_arg="${1:-status}"
+    if [[ "$mode_arg" == "status" || -z "$mode_arg" ]]; then
+      mode_status
+    else
+      switch_mode "$mode_arg"
+    fi
+    ;;
+  upgrade)
+    echo -e "${BLUE}⬆️  Upgrading AI system...${NC}\n"
+
+    # Upgrade system packages
+    echo -e "${CYAN}Upgrading system packages:${NC}"
+    sudo apt upgrade -y
+
+    # Upgrade n8n
+    echo -e "\n${CYAN}Upgrading n8n:${NC}"
+    n8n_running=false
+    if is_running "n8n"; then
+      n8n_running=true
+      echo -e "  ${YELLOW}⚠${NC} Stopping n8n for upgrade..."
+      stop_one n8n
+    fi
+    echo -e "  ${BLUE}→${NC} Updating n8n via npm..."
+    npm install -g n8n@latest
+    new_version=$(n8n --version 2>/dev/null || echo "unknown")
+    echo -e "  ${GREEN}✓${NC} n8n updated to version $new_version"
+    if [ "$n8n_running" = true ]; then
+      echo -e "  ${GREEN}🚀${NC} Restarting n8n..."
+      start_one n8n
+    fi
+
+    # Update and recreate Docker containers
+    echo -e "\n${CYAN}Updating Docker containers:${NC}"
+    for container in openwebui graphiti graphiti-neo4j zep zep-postgres; do
+      if docker ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+        echo -e "  ${BLUE}→${NC} Checking $container for updates..."
+
+        # Use helper script to upgrade container
+        if "$BIN/upgrade_docker_container.sh" "$container" 2>&1 | while IFS= read -r line; do
+          if [[ "$line" == *"already on latest version"* ]]; then
+            echo -e "  ${GREEN}✓${NC} $container is up to date"
+          elif [[ "$line" == *"successfully upgraded"* ]]; then
+            echo -e "  ${GREEN}✓${NC} $container upgraded successfully"
+          elif [[ "$line" == *"Pulling latest"* ]]; then
+            echo -e "    Pulling latest image..."
+          elif [[ "$line" == *"Recreating"* ]]; then
+            echo -e "    Recreating container with new image..."
+          fi
+        done; then
+          : # Success, output already shown
+        else
+          echo -e "  ${RED}✗${NC} Failed to upgrade $container"
+        fi
+      fi
+    done
+
+    # Restart systemd services
+    echo -e "\n${CYAN}Restarting systemd services:${NC}"
+    for s in vllm ai-gateway openai-shim openai-auth-validate; do
+      if systemctl is-active --quiet "$s"; then
+        echo -e "  ${YELLOW}↻${NC} Restarting $s..."
+        sudo systemctl restart "$s"
+      fi
+    done
+
+    sleep 3
+    echo -e "\n${GREEN}✓${NC} Upgrade complete!\n"
+    status
+    ;;
+  *)
+    status
+    echo -e "\n${YELLOW}Usage:${NC} ai [command] [service|mode]"
+    echo -e "\n${CYAN}Commands:${NC}"
+    echo -e "  status              Show status of all services (default)"
+    echo -e "  mode [mode]         Show/switch AI mode (fast, code, extreme, +image)"
+    echo -e "  start [service]     Start service(s) - use 'all' for all services"
+    echo -e "  stop [service]      Stop service(s) - use 'all' for all services"
+    echo -e "  restart [service]   Restart service(s)"
+    echo -e "  logs [service]      Tail logs for a service"
+    echo -e "  urls                Show service URLs"
+    echo -e "  health              Quick health check"
+    echo -e "  update              Check for system and Docker updates"
+    echo -e "  upgrade             Apply updates and restart services"
+    echo -e "\n${CYAN}AI Modes:${NC}"
+    echo -e "  fast                Ministral-3-14B (fastest responses)"
+    echo -e "  code                Devstral-24B (optimized for coding)"
+    echo -e "  extreme             Mistral-Small-24B (most capable)"
+    echo -e "  fast+image          Ministral + SDXL (LLM + image generation)"
+    echo -e "  image               SDXL only (no LLM)"
+    echo -e "\n${CYAN}Services:${NC}"
+    echo -e "  vllm, ai-gateway, openai-shim, openai-auth-validate"
+    echo -e "  stable-diffusion, a1111-bridge, n8n"
+    echo -e "  openwebui, graphiti, graphiti-neo4j, zep, zep-postgres"
+    echo -e "  gpu-watchdog (monitors GPU power, auto-restarts vLLM if overheating)"
+    ;;
+esac

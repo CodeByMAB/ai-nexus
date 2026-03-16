@@ -1,0 +1,37 @@
+[Unit]
+Description=OpenAI Auth Validate (key-prefix -> SD target)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ai
+Group=ai
+WorkingDirectory=/opt/ai/auth
+EnvironmentFile=/etc/default/openai-auth-validate
+# Run with Gunicorn instead of Flask's dev server:
+ExecStart=/opt/ai/venvs/ai-auth/bin/gunicorn -c /opt/ai/auth/gunicorn.conf.py validate_service:app
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+KillMode=mixed
+LimitNOFILE=4096
+
+# Security hardening (safe for our read-only code + journal logs)
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/ai/keys
+# Service reads from /opt and /etc; writes only to journal. No extra write paths needed.
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# Ensure predictable env (optional)
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

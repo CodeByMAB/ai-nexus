@@ -1,0 +1,46 @@
+[Unit]
+Description=AI Services Manager (KoboldCpp, Stable Diffusion, n8n) - Boot Only
+After=network-online.target multi-user.target
+Wants=network-online.target
+# Ensure NVIDIA drivers are loaded
+After=nvidia-persistenced.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=forking
+Restart=always
+RestartSec=30
+User=ai
+Group=ai
+WorkingDirectory=${HOME}
+Environment=HOME=${HOME}
+Environment=PATH=${HOME}/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=PYTHONPATH=${HOME}/.pyenv/versions/3.10.14/lib/python3.10/site-packages
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PYENV_ROOT=${HOME}/.pyenv
+
+# Pre-execution: Initialize NVIDIA and check GPU
+ExecStartPre=/usr/bin/nvidia-smi
+# ExecStartPre=/bin/bash -c 'ps aux | grep -q "[a]i.*start" && exit 1 || exit 0'
+
+# Use the ai script that handles GPU optimization properly
+ExecStart=${HOME}/bin/ai start all
+ExecStop=${HOME}/bin/ai stop all
+
+# Wait longer for AI services to start
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-services
+
+# Security (less restrictive for AI services)
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target

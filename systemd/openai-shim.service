@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenAI shim for Open WebUI
+After=network-online.target
+
+[Service]
+Type=simple
+User=ai
+WorkingDirectory=/opt/openai-shim
+Environment=BACKEND_URL=http://127.0.0.1:5005
+# Optionally enforce a token that OWUI must send (matches "API key" devs will enter):
+# Environment=REQUIRE_TOKEN=pg_SwyemBIIlVxWBT87YyModf9gQQteV-xZ5dhPsKZ44Bs
+ExecStart=/opt/openai-shim/venv/bin/uvicorn app:app --host 0.0.0.0 --port 5100
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

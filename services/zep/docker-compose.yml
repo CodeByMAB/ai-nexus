@@ -1,0 +1,51 @@
+# /opt/ai/zep/docker-compose.yml
+services:
+  zep-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: zep-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zep
+      POSTGRES_PASSWORD: PIax9zvrOLOCxbnxkt6Gc0QBAAzkBRFrx6YKKwE7wm0=
+      POSTGRES_DB: zep
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+
+  zep:
+    image: ghcr.io/getzep/zep:latest
+    container_name: zep
+    depends_on:
+      - zep-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8010:8000"
+
+    # Make host.docker.internal resolve on Linux
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Use custom config file
+    entrypoint: ["/app/zep", "--config", "/config/config.yaml"]
+
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+
+    environment:
+      # Logging
+      ZEP_LOG_LEVEL: info
+
+      # Storage (the *correct* env keys)
+      ZEP_STORE_TYPE: postgres
+      ZEP_STORE_POSTGRES_DSN: postgres://zep:PIax9zvrOLOCxbnxkt6Gc0QBAAzkBRFrx6YKKwE7wm0%3D@zep-postgres:5432/zep?sslmode=disable
+
+      # Point Zep at your gateway for LLM & embeddings
+      ZEP_OPENAI_API_BASE: http://host.docker.internal:5050/v1
+
+      # Zep demands a non-empty key at boot; this is *only* for boot.
+      # Real requests from OWUI will carry each user's Bearer pg_ key.
+      ZEP_OPENAI_API_KEY: "dummy_boot_key"
+
+      # We rely on your gateway’s auth; keep Zep’s own auth off
+      ZEP_AUTH_REQUIRED: "false"

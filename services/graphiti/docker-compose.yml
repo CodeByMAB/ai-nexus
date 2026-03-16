@@ -1,0 +1,46 @@
+services:
+  neo4j:
+    image: neo4j:5.26.13
+    container_name: graphiti-neo4j
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7474:7474"  # Neo4j browser
+      - "127.0.0.1:7687:7687"  # Bolt
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
+      NEO4J_dbms_security_auth__enabled: "true"
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1024m
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - ./data:/data
+      - ./logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  graphiti:
+    # USE THE LOCAL IMAGE WE JUST BUILT
+    image: graphiti:local
+    container_name: graphiti
+    restart: unless-stopped
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./src/server/graph_service/routers/ingest.py:/app/graph_service/routers/ingest.py:ro
+      - ./src/server/graph_service/routers/retrieve.py:/app/graph_service/routers/retrieve.py:ro
+      - ./src/graphiti_core/llm_client/openai_client.py:/app/.venv/lib/python3.12/site-packages/graphiti_core/llm_client/openai_client.py:ro
+      - ./src/graphiti_core/llm_client/openai_base_client.py:/app/.venv/lib/python3.12/site-packages/graphiti_core/llm_client/openai_base_client.py:ro
+      - ./src/graphiti_core/utils/maintenance/node_operations.py:/app/.venv/lib/python3.12/site-packages/graphiti_core/utils/maintenance/node_operations.py:ro
+    ports:
+      - "127.0.0.1:8001:8000"   # Graphiti API (FastAPI/uvicorn)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # resolve host from Linux containers
+    # If the image’s default CMD/ENTRYPOINT already runs the app, this is not needed.
+    # If you built from source and it expects uvicorn, uncomment:
+    # command: uvicorn app.main:app --host 0.0.0.0 --port 8000

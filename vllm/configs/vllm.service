@@ -1,0 +1,35 @@
+[Unit]
+Description=vLLM Inference Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ai
+Group=ai
+WorkingDirectory=/opt/ai/vllm
+Environment="HF_HOME=/opt/models/huggingface"
+Environment="CUDA_VISIBLE_DEVICES=0"
+Environment="VLLM_ATTENTION_BACKEND=FLASH_ATTN"
+
+# Default to Ministral-3-14B (fast mode) - change model as needed
+ExecStart=/opt/ai/vllm/.venv/bin/vllm serve mistralai/Ministral-3-14B-Instruct-2512 \
+    --host 0.0.0.0 \
+    --port 11434 \
+    --gpu-memory-utilization 0.95 \
+    --max-model-len 65536 \
+    --dtype auto \
+    --tokenizer_mode mistral \
+    --config_format mistral \
+    --load_format mistral \
+    --enable-auto-tool-choice \
+    --tool-call-parser mistral \
+    --served-model-name default
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/opt/ai/vllm/logs/vllm.log
+StandardError=append:/opt/ai/vllm/logs/vllm-error.log
+
+[Install]
+WantedBy=multi-user.target

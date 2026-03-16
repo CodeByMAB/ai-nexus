@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # Nginx Gateway - Single entry point for all MCP servers
+  nginx-mcp-gateway:
+    build: ./nginx
+    container_name: mcp-gateway
+    ports:
+      - "0.0.0.0:8100:80"
+    networks:
+      - mcp-network
+      - graphiti_default
+    depends_on:
+      - dockerhub-mcp
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Docker Hub MCP Server - Internal port 8101
+  dockerhub-mcp:
+    build: ./docker-hub-mcp
+    container_name: dockerhub-mcp
+    command: ["--transport=http", "--port=8000"]
+    environment:
+      - NODE_ENV=production
+      - DOCKERHUB_PAT=${DOCKERHUB_PAT:-}
+    networks:
+      - mcp-network
+    restart: unless-stopped
+
+
+networks:
+  mcp-network:
+    driver: bridge
+    name: mcp-network
+  graphiti_default:
+    external: true
