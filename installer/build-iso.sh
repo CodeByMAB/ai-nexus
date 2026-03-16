@@ -16,9 +16,7 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 VERSION="${1:-1.0.0}"
 [[ "$1" == "--version" ]] && VERSION="${2:-1.0.0}"
 
-UBUNTU_VERSION="24.04"
-UBUNTU_ISO="ubuntu-${UBUNTU_VERSION}-live-server-amd64.iso"
-UBUNTU_URL="https://releases.ubuntu.com/24.04/${UBUNTU_ISO}"
+UBUNTU_BASE_URL="https://releases.ubuntu.com/24.04"
 OUTPUT_ISO="$SCRIPT_DIR/ai-nexus-installer-${VERSION}-amd64.iso"
 WORK_DIR="$(mktemp -d /tmp/ai-nexus-iso-XXXXXX)"
 
@@ -30,7 +28,7 @@ fail() { echo -e "${RED}[ FAIL ]${NC} $*"; rm -rf "$WORK_DIR"; exit 1; }
 cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
 
-log "AI Nexus ISO Builder v${VERSION}"
+log "AI Nexus ISO Builder v${VERSION} (Ubuntu 24.04 LTS)"
 log "Output: $OUTPUT_ISO"
 echo ""
 
@@ -40,23 +38,26 @@ for cmd in xorriso 7z wget sha256sum tar; do
 done
 ok "Dependencies satisfied"
 
+# ---- Resolve Ubuntu ISO filename from SHA256SUMS ----
+log "Resolving latest Ubuntu 24.04 Server ISO..."
+SUMS_FILE="/tmp/ubuntu-noble-sha256sums"
+wget -q "${UBUNTU_BASE_URL}/SHA256SUMS" -O "$SUMS_FILE" || fail "Could not fetch SHA256SUMS from ${UBUNTU_BASE_URL}"
+UBUNTU_ISO="$(grep -oP 'ubuntu-24\.04[^"]*-live-server-amd64\.iso' "$SUMS_FILE" | tail -1)"
+[[ -n "$UBUNTU_ISO" ]] || fail "Could not determine Ubuntu ISO filename from SHA256SUMS"
+UBUNTU_URL="${UBUNTU_BASE_URL}/${UBUNTU_ISO}"
+log "Resolved ISO: ${UBUNTU_ISO}"
+
 # ---- Download Ubuntu ISO ----
 cd "$SCRIPT_DIR"
 if [[ ! -f "$UBUNTU_ISO" ]]; then
-  log "Downloading Ubuntu ${UBUNTU_VERSION} Server..."
-  wget -c --progress=bar:force "$UBUNTU_URL" -O "$UBUNTU_ISO" || fail "Download failed"
+  log "Downloading ${UBUNTU_ISO}..."
+  wget -c --progress=bar:force "$UBUNTU_URL" -O "$UBUNTU_ISO" || fail "Download failed: ${UBUNTU_URL}"
 fi
 
 # Verify SHA256
 log "Verifying Ubuntu ISO checksum..."
-SUMS_FILE="/tmp/ubuntu-noble-sha256sums"
-wget -q "https://releases.ubuntu.com/24.04/SHA256SUMS" -O "$SUMS_FILE"
-if grep -q "$UBUNTU_ISO" "$SUMS_FILE"; then
-  grep "$UBUNTU_ISO" "$SUMS_FILE" | sha256sum --check --status || fail "Checksum verification failed! ISO may be corrupt."
-  ok "Checksum verified"
-else
-  log "WARNING: Could not find checksum entry — proceeding anyway"
-fi
+grep "$UBUNTU_ISO" "$SUMS_FILE" | sha256sum --check --status || fail "Checksum verification failed! ISO may be corrupt."
+ok "Checksum verified"
 
 # ---- Extract ISO ----
 log "Extracting Ubuntu ISO..."
