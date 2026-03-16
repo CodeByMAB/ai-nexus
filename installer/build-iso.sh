@@ -16,7 +16,8 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 VERSION="${1:-1.0.0}"
 [[ "$1" == "--version" ]] && VERSION="${2:-1.0.0}"
 
-UBUNTU_BASE_URL="https://releases.ubuntu.com/24.04"
+UBUNTU_ISO="ubuntu-24.04.4-live-server-amd64.iso"
+UBUNTU_URL="https://releases.ubuntu.com/24.04/${UBUNTU_ISO}"
 OUTPUT_ISO="$SCRIPT_DIR/ai-nexus-installer-${VERSION}-amd64.iso"
 WORK_DIR="$(mktemp -d /tmp/ai-nexus-iso-XXXXXX)"
 
@@ -38,17 +39,9 @@ for cmd in xorriso 7z wget sha256sum tar; do
 done
 ok "Dependencies satisfied"
 
-# ---- Resolve Ubuntu ISO filename from SHA256SUMS ----
-log "Resolving latest Ubuntu 24.04 Server ISO..."
-SUMS_FILE="/tmp/ubuntu-noble-sha256sums"
-wget -q "${UBUNTU_BASE_URL}/SHA256SUMS" -O "$SUMS_FILE" || fail "Could not fetch SHA256SUMS from ${UBUNTU_BASE_URL}"
-UBUNTU_ISO="$(grep -oP 'ubuntu-24\.04[^"]*-live-server-amd64\.iso' "$SUMS_FILE" | tail -1)"
-[[ -n "$UBUNTU_ISO" ]] || fail "Could not determine Ubuntu ISO filename from SHA256SUMS"
-UBUNTU_URL="${UBUNTU_BASE_URL}/${UBUNTU_ISO}"
-log "Resolved ISO: ${UBUNTU_ISO}"
-
 # ---- Download Ubuntu ISO ----
 cd "$SCRIPT_DIR"
+log "Using Ubuntu ISO: ${UBUNTU_ISO}"
 if [[ ! -f "$UBUNTU_ISO" ]]; then
   log "Downloading ${UBUNTU_ISO}..."
   wget -c --progress=bar:force "$UBUNTU_URL" -O "$UBUNTU_ISO" || fail "Download failed: ${UBUNTU_URL}"
@@ -56,6 +49,8 @@ fi
 
 # Verify SHA256
 log "Verifying Ubuntu ISO checksum..."
+SUMS_FILE="/tmp/ubuntu-noble-sha256sums"
+wget -q "https://releases.ubuntu.com/24.04/SHA256SUMS" -O "$SUMS_FILE" || fail "Could not fetch SHA256SUMS"
 grep "$UBUNTU_ISO" "$SUMS_FILE" | sha256sum --check --status || fail "Checksum verification failed! ISO may be corrupt."
 ok "Checksum verified"
 
