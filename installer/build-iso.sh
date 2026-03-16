@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # AI Nexus — ISO Builder
-# Remaster Ubuntu 24.04.2 LTS Server with AI Nexus autoinstall
+# Remaster Ubuntu 24.04 LTS Server with AI Nexus autoinstall
 #
 # Requirements: xorriso p7zip-full wget
 #   sudo apt install xorriso p7zip-full wget
@@ -16,7 +16,7 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 VERSION="${1:-1.0.0}"
 [[ "$1" == "--version" ]] && VERSION="${2:-1.0.0}"
 
-UBUNTU_VERSION="24.04.2"
+UBUNTU_VERSION="24.04"
 UBUNTU_ISO="ubuntu-${UBUNTU_VERSION}-live-server-amd64.iso"
 UBUNTU_URL="https://releases.ubuntu.com/24.04/${UBUNTU_ISO}"
 OUTPUT_ISO="$SCRIPT_DIR/ai-nexus-installer-${VERSION}-amd64.iso"
