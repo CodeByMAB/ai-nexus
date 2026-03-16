@@ -10,7 +10,7 @@
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Email security reports to: **security@YOURDOMAIN.COM**
+Email security reports to: **security@8ase0f0ps.COM** // TBD
 
 Include:
 - Description of the vulnerability
